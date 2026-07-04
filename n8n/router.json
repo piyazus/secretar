@@ -1,0 +1,198 @@
+{
+  "name": "Secretar Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-chat",
+      "name": "Webhook (frontend /api/chat)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CRED_ID",
+          "name": "Secretar Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Нормализация входа: webhook и telegram приводим к общему формату\nconst item = $input.first().json;\nlet text, channel, chatId;\nif (item.message) { // Telegram\n  text = item.message.text ?? '';\n  channel = 'telegram';\n  chatId = item.message.chat.id;\n} else { // Webhook от frontend\n  text = item.body?.text ?? item.text ?? '';\n  channel = 'web';\n  chatId = null;\n}\nreturn [{ json: { text, channel, chatId } }];"
+      },
+      "id": "normalize",
+      "name": "Normalize input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.LLM_ROUTING_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 20, system: 'Классифицируй запрос секретарю. Ответь одним словом: calendar | gmail | summary | chat', messages: [{ role: 'user', content: $json.text }] }) }}",
+        "options": {}
+      },
+      "id": "haiku-router",
+      "name": "Haiku: classify intent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 150]
+    },
+    {
+      "parameters": {
+        "jsCode": "const intent = ($input.first().json.content?.[0]?.text ?? 'chat').trim().toLowerCase();\nconst prev = $('Normalize input').first().json;\nreturn [{ json: { ...prev, intent } }];"
+      },
+      "id": "extract-intent",
+      "name": "Extract intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 150]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "options": { "caseSensitive": false }, "conditions": [{ "leftValue": "={{ $json.intent }}", "rightValue": "calendar", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" }, "outputKey": "calendar" },
+            { "conditions": { "options": { "caseSensitive": false }, "conditions": [{ "leftValue": "={{ $json.intent }}", "rightValue": "gmail", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" }, "outputKey": "gmail" },
+            { "conditions": { "options": { "caseSensitive": false }, "conditions": [{ "leftValue": "={{ $json.intent }}", "rightValue": "summary", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" }, "outputKey": "summary" }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "switch-intent",
+      "name": "Switch by intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.LLM_COMPLEX_MODEL || 'claude-sonnet-5', max_tokens: 1024, system: 'Ты — Secretar, персональный секретарь директора фонда. Отвечай кратко, по-русски.', messages: [{ role: 'user', content: $json.text }] }) }}",
+        "options": {}
+      },
+      "id": "sonnet-answer",
+      "name": "Sonnet: answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 150],
+      "notes": "TODO: ветки calendar/gmail/summary должны вызывать sub-workflow (calendar-actions.json, gmail-actions.json) + audit-log.json. Пока все интенты идут в общий ответ."
+    },
+    {
+      "parameters": {
+        "jsCode": "const answer = $input.first().json.content?.[0]?.text ?? 'Ошибка LLM';\nconst prev = $('Extract intent').first().json;\nreturn [{ json: { answer, channel: prev.channel, chatId: prev.chatId } }];"
+      },
+      "id": "prepare-reply",
+      "name": "Prepare reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [{ "leftValue": "={{ $json.channel }}", "rightValue": "telegram", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-telegram",
+      "name": "If Telegram",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 150]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.answer }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-send",
+      "name": "Telegram: send reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1760, 60],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CRED_ID",
+          "name": "Secretar Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ answer: $json.answer }) }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1760, 240]
+    }
+  ],
+  "connections": {
+    "Webhook (frontend /api/chat)": { "main": [[{ "node": "Normalize input", "type": "main", "index": 0 }]] },
+    "Telegram Trigger": { "main": [[{ "node": "Normalize input", "type": "main", "index": 0 }]] },
+    "Normalize input": { "main": [[{ "node": "Haiku: classify intent", "type": "main", "index": 0 }]] },
+    "Haiku: classify intent": { "main": [[{ "node": "Extract intent", "type": "main", "index": 0 }]] },
+    "Extract intent": { "main": [[{ "node": "Switch by intent", "type": "main", "index": 0 }]] },
+    "Switch by intent": {
+      "main": [
+        [{ "node": "Sonnet: answer", "type": "main", "index": 0 }],
+        [{ "node": "Sonnet: answer", "type": "main", "index": 0 }],
+        [{ "node": "Sonnet: answer", "type": "main", "index": 0 }],
+        [{ "node": "Sonnet: answer", "type": "main", "index": 0 }]
+      ]
+    },
+    "Sonnet: answer": { "main": [[{ "node": "Prepare reply", "type": "main", "index": 0 }]] },
+    "Prepare reply": { "main": [[{ "node": "If Telegram", "type": "main", "index": 0 }]] },
+    "If Telegram": {
+      "main": [
+        [{ "node": "Telegram: send reply", "type": "main", "index": 0 }],
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

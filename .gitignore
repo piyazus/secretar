@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.local
+.next/
+dist/
+*.log
+infra/postgres-data/
+infra/n8n-data/
+infra/caddy-data/
+infra/caddy-config/

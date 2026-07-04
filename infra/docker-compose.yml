@@ -1,0 +1,77 @@
+version: "3.9"
+
+# Secretar — self-hosted инфраструктура (ТЗ §6-7).
+# Всё, кроме LLM API (Anthropic), крутится на одном VPS.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-secretar}
+      POSTGRES_USER: ${POSTGRES_USER:-secretar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secretar}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [secretar-net]
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      N8N_HOST: ${N8N_HOST:-n8n.localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      NODE_ENV: production
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:?required}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:?required}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-secretar}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-secretar}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ../n8n:/workflows:ro
+    networks: [secretar-net]
+
+  faster-whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    restart: unless-stopped
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+    volumes:
+      - whisper-cache:/root/.cache
+    networks: [secretar-net]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on: [postgres, n8n]
+    env_file:
+      - ../.env
+    networks: [secretar-net]
+
+  # Cloudflare Tunnel — публичный доступ без открытия портов (домашний ПК).
+  # TLS терминируется на Cloudflare; ingress (hostname → сервис) настраивается
+  # в дашборде Zero Trust → Networks → Tunnels:
+  #   app.<домен>  → http://frontend:3000
+  #   n8n.<домен>  → http://n8n:5678
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run --token ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set (Zero Trust -> Tunnels)}
+ 

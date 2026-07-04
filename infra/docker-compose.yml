@@ -71,6 +71,23 @@ services:
       - ../.env
     networks: [secretar-net]
 
+  # WhatsApp QR-линк (Baileys, ТЗ §4.5 v2.0). QR: http://localhost:3080/qr
+  # ⚠️ Неофициальный протокол — Meta может заблокировать номер.
+  wa-bridge:
+    build:
+      context: ../wa-bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on: [n8n]
+    environment:
+      N8N_WA_WEBHOOK: http://n8n:5678/webhook/wa
+      WA_AUTH_DIR: /data/auth
+    ports:
+      - "3080:3080"
+    volumes:
+      - wa-auth:/data
+    networks: [secretar-net]
+
   # Cloudflare Tunnel — публичный доступ без открытия портов (домашний ПК).
   # TLS терминируется на Cloudflare; ingress (hostname → сервис) настраивается
   # в дашборде Zero Trust → Networks → Tunnels:
@@ -107,5 +124,6 @@ volumes:
   postgres-data:
   n8n-data:
   whisper-cache:
+  wa-auth:
   caddy-data:
   caddy-config:

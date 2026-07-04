@@ -8,3 +8,9 @@ infra/postgres-data/
 infra/n8n-data/
 infra/caddy-data/
 infra/caddy-config/
+ps_err.txt
+addr_test.txt
+cf.log
+deploy_copy*.txt
+n8n/credentials-import.json
+wa-bridge/auth/

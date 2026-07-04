@@ -30,9 +30,12 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const idRef = useRef(1);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     listRef.current?.scrollTo({
@@ -41,15 +44,16 @@ export default function ChatPage() {
     });
   }, [messages, busy]);
 
+  function pushMessage(role: Msg["role"], text: string) {
+    setMessages((m) => [...m, { id: idRef.current++, role, text, time: now() }]);
+  }
+
   async function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
-    setMessages((m) => [
-      ...m,
-      { id: idRef.current++, role: "user", text: trimmed, time: now() },
-    ]);
+    pushMessage("user", trimmed);
     setBusy(true);
     try {
       const res = await fetch("/api/chat", {
@@ -59,27 +63,65 @@ export default function ChatPage() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setMessages((m) => [
-        ...m,
-        {
-          id: idRef.current++,
-          role: "assistant",
-          text: data.reply ?? "Пустой ответ",
-          time: now(),
-        },
-      ]);
+      pushMessage("assistant", data.reply ?? "Пустой ответ");
     } catch {
-      setMessages((m) => [
-        ...m,
-        {
-          id: idRef.current++,
-          role: "error",
-          text: "Не удалось получить ответ. Проверьте соединение и попробуйте ещё раз.",
-          time: now(),
-        },
-      ]);
+      pushMessage(
+        "error",
+        "Не удалось получить ответ. Проверьте соединение и попробуйте ещё раз."
+      );
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Голосовой ввод (ТЗ §4.4): MediaRecorder -> /api/voice -> faster-whisper.
+  async function toggleRecording() {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        const blob = new Blob(chunksRef.current, {
+          type: mimeType || "audio/webm",
+        });
+        if (blob.size === 0) return;
+        setBusy(true);
+        try {
+          const res = await fetch("/api/voice", {
+            method: "POST",
+            headers: { "Content-Type": blob.type },
+            body: blob,
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          setBusy(false);
+          if (data.text?.trim()) {
+            await send(data.text.trim());
+          } else {
+            pushMessage("error", "Не удалось распознать речь. Попробуйте ещё раз.");
+          }
+        } catch {
+          setBusy(false);
+          pushMessage("error", "Ошибка распознавания голоса. Попробуйте ещё раз.");
+        }
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch {
+      pushMessage("error", "Нет доступа к микрофону. Разрешите доступ в браузере.");
     }
   }
 
@@ -102,6 +144,7 @@ export default function ChatPage() {
       className="flex h-[100dvh] flex-col bg-neutral-950 text-neutral-100"
       style={{ paddingTop: "var(--safe-top)" }}
     >
+      {/* Шапка */}
       <header className="flex items-center gap-3 border-b border-neutral-800/80 bg-neutral-950/90 px-4 py-3 backdrop-blur">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-900 text-base font-bold text-neutral-50">
           S
@@ -124,6 +167,7 @@ export default function ChatPage() {
         </span>
       </header>
 
+      {/* Сообщения */}
       <div
         ref={listRef}
         className="chat-scroll flex-1 space-y-3 overflow-y-auto px-4 py-4"
@@ -193,6 +237,7 @@ export default function ChatPage() {
         )}
       </div>
 
+      {/* Ввод */}
       <footer
         className="border-t border-neutral-800/80 bg-neutral-950 px-3 py-3"
         style={{ paddingBottom: "calc(0.75rem + var(--safe-bottom))" }}
@@ -200,20 +245,14 @@ export default function ChatPage() {
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           <button
             type="button"
-            title="Голосовой ввод (скоро)"
-            aria-label="Голосовой ввод"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-400 transition hover:border-neutral-500 hover:text-neutral-200 active:scale-95"
-            onClick={() =>
-              setMessages((m) => [
-                ...m,
-                {
-                  id: idRef.current++,
-                  role: "assistant",
-                  text: "Голосовой ввод появится после подключения faster-whisper (фаза 2).",
-                  time: now(),
-                },
-              ])
-            }
+            title={recording ? "Остановить запись" : "Голосовой ввод"}
+            aria-label={recording ? "Остановить запись" : "Голосовой ввод"}
+            onClick={toggleRecording}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition active:scale-95 ${
+              recording
+                ? "animate-pulse border-red-600 bg-red-900/60 text-red-200"
+                : "border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+            }`}
           >
             <svg
               width="18"

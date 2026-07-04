@@ -13,8 +13,15 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
-    "paths": { "@/*": ["./*"], "@lib/*": ["../lib/*"] }
+    "paths": {
+      "@/*": ["./*"],
+      "@lib/*": ["../lib/*"],
+      "googleapis": ["./node_modules/googleapis"],
+      "google-auth-library": ["./node_modules/google-auth-library"],
+      "pg": ["./node_modules/@types/pg"],
+      "@anthropic-ai/sdk": ["./node_modules/@anthropic-ai/sdk"]
+    }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "../lib/**/*.ts"],
   "exclude": ["node_modules"]
 }

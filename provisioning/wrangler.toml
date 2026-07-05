@@ -1,0 +1,15 @@
+# Provisioning API — Cloudflare Worker (деплой: npx wrangler deploy, либо через dash API)
+name = "secretar-provisioning"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+
+[vars]
+ACCOUNT_ID = "98b3394239dabfb9af93a7382270c172"
+ZONE_ID = "e2b9a143ed0c81f05abf927cf2a29073"
+BASE_DOMAIN = "secretarchik.online"
+
+[[kv_namespaces]]
+binding = "NAMES"
+id = "REPLACE_AFTER_CREATE"
+
+# secret: CF_API_TOKEN (Account: Cloudflare Tunnel Edit; Zone: DNS Edit)
